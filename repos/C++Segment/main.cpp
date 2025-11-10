@@ -37,7 +37,7 @@ float normalizeAxis(Sint16 v) {
 // Target matching name (case-insensitive). Can be overridden by --name argument.
 static std::string g_target_name = "radiomaster pocket joystick";
 
-// UDP streaming configuration (local)
+// Streaming configuration (local)
 static const char* STREAM_IP = "127.0.0.1"; // localhost
 static const int STREAM_PORT =9000; // port to send JSON to
 
@@ -45,11 +45,11 @@ static const int STREAM_PORT =9000; // port to send JSON to
 #ifdef _WIN32
 static SOCKET g_sock = INVALID_SOCKET;
 #else
-static int g_sock = -1;
+ static int g_sock = -1;
 #endif
 static struct sockaddr_in g_dest_addr;
 
-bool init_udp_stream() {
+bool init_stream() {
 #ifdef _WIN32
  WSADATA wsaData;
  int r = WSAStartup(MAKEWORD(2,2), &wsaData);
@@ -59,8 +59,8 @@ bool init_udp_stream() {
  }
 #endif
 
- // create UDP socket
- g_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+ // create TCP socket
+ g_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
  if (
 #ifdef _WIN32
  g_sock == INVALID_SOCKET
@@ -84,11 +84,30 @@ bool init_udp_stream() {
  return false;
  }
 
- std::cout << "Streaming JSON to " << STREAM_IP << ":" << STREAM_PORT << " via UDP\n";
+ // connect to server
+ std::cout << "Connecting to " << STREAM_IP << ":" << STREAM_PORT << " via TCP\n";
+ int conn_res = connect(g_sock, (struct sockaddr*)&g_dest_addr, sizeof(g_dest_addr));
+#ifdef _WIN32
+ if (conn_res == SOCKET_ERROR) {
+ std::cerr << "connect() failed: " << WSAGetLastError() << "\n";
+ closesocket(g_sock);
+ g_sock = INVALID_SOCKET;
+ return false;
+ }
+#else
+ if (conn_res <0) {
+ std::cerr << "connect() failed\n";
+ close(g_sock);
+ g_sock = -1;
+ return false;
+ }
+#endif
+
+ std::cout << "Connected to " << STREAM_IP << ":" << STREAM_PORT << "\n";
  return true;
 }
 
-void close_udp_stream() {
+void close_stream() {
  if (
 #ifdef _WIN32
  g_sock != INVALID_SOCKET
@@ -96,14 +115,16 @@ void close_udp_stream() {
  g_sock >=0
 #endif
  ) {
-#ifdef _WIN32
+ #ifdef _WIN32
+ shutdown(g_sock, SD_BOTH);
  closesocket(g_sock);
  WSACleanup();
  g_sock = INVALID_SOCKET;
-#else
+ #else
+ shutdown(g_sock, SHUT_RDWR);
  close(g_sock);
  g_sock = -1;
-#endif
+ #endif
  }
 }
 
@@ -131,7 +152,7 @@ int main(int argc, char** argv) {
  }
  }
 
- std::cout << "Starting Radiomaster-focused joystick scanner (SDL2)\n";
+ std::cout << "Starting Radiomaster-focused joystick scanner (SDL2)" << "\n";
 
  if (SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_EVENTS) !=0) {
  std::cerr << "SDL_Init error: " << SDL_GetError() << "\n";
@@ -140,9 +161,9 @@ int main(int argc, char** argv) {
 
  SDL_JoystickEventState(SDL_ENABLE);
 
- // initialize UDP streaming
- if (!init_udp_stream()) {
- std::cerr << "Warning: failed to initialize UDP stream. Continuing without network streaming.\n";
+ // initialize TCP streaming
+ if (!init_stream()) {
+ std::cerr << "Warning: failed to initialize TCP stream. Continuing without network streaming.\n";
  }
 
  SDL_Joystick* joy = nullptr;
@@ -152,7 +173,7 @@ int main(int argc, char** argv) {
  auto try_open = [&]() -> bool {
  int idx = find_radiomaster_index();
  if (idx <0) {
- std::cout << "Radiomaster not found in current device list.\n";
+ std::cout << "Radiomaster not found in current device list." << "\n";
  return false;
  }
  std::cout << "Attempting to open Radiomaster at device index " << idx << "\n";
@@ -222,7 +243,7 @@ int main(int argc, char** argv) {
  if (joy) {
  int removed_id = ev.jdevice.which;
  if (removed_id == opened_instance_id) {
- std::cout << "Our Radiomaster was removed. Closing joystick.\n";
+ std::cout << "Our Radiomaster was removed. Closing joystick." << "\n";
  SDL_JoystickClose(joy);
  joy = nullptr;
  opened_instance_id = -1;
@@ -309,6 +330,15 @@ int main(int argc, char** argv) {
 
  std::string json = ss.str();
 
+ // Create a single-line (newline-delimited) version of the JSON for network transport
+ std::string net_json;
+ net_json.reserve(json.size());
+ for (char c : json) {
+ if (c == '\n' || c == '\r') continue; // remove internal newlines
+ net_json.push_back(c);
+ }
+ net_json.push_back('\n'); // message delimiter for the receiver
+
  // Human-readable block (labels swapped to match physical movement)
  std::ostringstream human;
  human << std::fixed << std::setprecision(3);
@@ -322,7 +352,7 @@ int main(int argc, char** argv) {
  // Output JSON then human block
  std::cout << json << "\n" << human.str();
 
- // Send JSON over UDP to configured address
+ // Send single-line JSON over TCP to configured address
  if (
 #ifdef _WIN32
  g_sock != INVALID_SOCKET
@@ -330,14 +360,19 @@ int main(int argc, char** argv) {
  g_sock >=0
 #endif
  ) {
- int sent = (int)sendto(g_sock, json.c_str(), (int)json.size(),0, (struct sockaddr*)&g_dest_addr, sizeof(g_dest_addr));
- if (sent <0) {
 #ifdef _WIN32
- std::cerr << "sendto() failed: " << WSAGetLastError() << "\n";
-#else
- std::cerr << "sendto() failed\n";
-#endif
+ int sent = (int)send(g_sock, net_json.c_str(), (int)net_json.size(),0);
+ if (sent == SOCKET_ERROR) {
+ std::cerr << "send() failed: " << WSAGetLastError() << "\n";
+ close_stream();
  }
+#else
+ ssize_t sent = send(g_sock, net_json.c_str(), (ssize_t)net_json.size(),0);
+ if (sent <0) {
+ std::cerr << "send() failed\n";
+ close_stream();
+ }
+#endif
  }
  }
 
@@ -345,7 +380,7 @@ int main(int argc, char** argv) {
  }
 
  if (joy) SDL_JoystickClose(joy);
- close_udp_stream();
+ close_stream();
  SDL_Quit();
  return 0;
 }
