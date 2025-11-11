@@ -1,11 +1,14 @@
+// Scala
 package com.dronebot
 
 import cats.effect.{IO, IOApp, Ref}
 import cats.effect.std.Dispatcher
+import cats.syntax.all._
 import fs2.Stream
 import fs2.concurrent.Topic
 import com.dronebot.config.AppConfig
 import com.dronebot.domain.{ControlCommand, ControllerState}
+import com.dronebot.gamedroneinfo.{TelemetryUdpReceiver, DroneTelemetry}
 import com.dronebot.output.ConsoleSimulatorOutput
 import com.dronebot.radiosim.VirtualGamepadPort
 import scalafx.application.Platform
@@ -45,6 +48,10 @@ object Main extends IOApp.Simple {
 
           val out = new ConsoleSimulatorOutput[IO]
 
+          val telemReceiver = new TelemetryUdpReceiver[IO]("0.0.0.0", 9001)
+          val telemStream: Stream[IO, Unit] =
+            telemReceiver.stream.evalMap(t => ui.setDroneTelemetry(t))
+
           def topicTicks(t: Topic[IO, Unit], maxQueued: Int = 1): Stream[IO, Unit] =
             t.subscribe(maxQueued).map(_ => ())
 
@@ -55,10 +62,9 @@ object Main extends IOApp.Simple {
                 IO.delay(VirtualGamepadPort.trySelect[IO]).flatTap(p => vpadRef.set(p))
             }
 
-          // Streams dependent on actual gamepad availability
           val gamepadStreams: Stream[IO, Unit] =
             Stream.eval(startVPad).flatMap {
-              case Some(vpad) =>
+              case Some(vpad: VirtualGamepadPort[IO]) =>
                 val controlLog =
                   ctrlTopic.subscribe(64).evalMap { st =>
                     IO.println(f"[CTRL] t=${st.throttle.value}%.2f y=${st.yaw.value}%.2f p=${st.pitch.value}%.2f r=${st.roll.value}%.2f")
@@ -95,7 +101,10 @@ object Main extends IOApp.Simple {
           val stopLog: Stream[IO, Unit]    = ui.onStop.evalMap(_ => IO.println("[UI] Stop pressed"))
 
           val merged: Stream[IO, Unit] =
-            Stream(gamepadStreams, calStream, testStream, stopLog, simStarter, radioStarter).parJoinUnbounded
+            Stream
+              .emits(List(gamepadStreams, calStream, testStream, stopLog, simStarter, radioStarter, telemStream))
+              .covary[IO]
+              .parJoinUnbounded
 
           IO.blocking(Platform.startup(() => ui.show())) *>
             IO.race(ui.onStop.head.compile.drain, merged.compile.drain).void

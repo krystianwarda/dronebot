@@ -7,7 +7,6 @@ import com.dronebot.domain.{ControllerState, Pitch, Roll, Throttle, Yaw}
 import com.dronebot.ports.UILayerPort
 import fs2.concurrent.Topic
 import scalafx.Includes._
-import scalafx.animation.AnimationTimer
 import scalafx.application.Platform
 import scalafx.geometry.{Insets, Pos}
 import scalafx.scene.Scene
@@ -19,27 +18,30 @@ import scalafx.scene.shape.Circle
 import scalafx.stage.Stage
 
 final class RadioSimUI[F[_]](
-  dispatcher: Dispatcher[F],
-  ctrlTopic: Topic[F, ControllerState],
-  calibrateTopic: Topic[F, Unit],
-  testTopic: Topic[F, Unit],
-  stopTopic: Topic[F, Unit],
-  throttleR: AxisRange,
-  yawR: AxisRange,
-  pitchR: AxisRange,
-  rollR: AxisRange,
-  uiWidth: Int,
-  uiHeight: Int,
-  uiTheme: String
-)(implicit F: Async[F]) extends UILayerPort[F] {
+                              dispatcher: Dispatcher[F],
+                              ctrlTopic: Topic[F, ControllerState],
+                              calibrateTopic: Topic[F, Unit],
+                              testTopic: Topic[F, Unit],
+                              stopTopic: Topic[F, Unit],
+                              throttleR: AxisRange,
+                              yawR: AxisRange,
+                              pitchR: AxisRange,
+                              rollR: AxisRange,
+                              uiWidth: Int,
+                              uiHeight: Int,
+                              uiTheme: String
+                            )(implicit F: Async[F]) extends UILayerPort[F] {
 
   private var leftJoystickOpt: Option[JoystickView]  = None
   private var rightJoystickOpt: Option[JoystickView] = None
   private var statusLabelOpt: Option[scalafx.scene.control.Label] = None
 
-  private var calibrationTimerOpt: Option[AnimationTimer] = None
-  private var calibrationStartNanos: Long = 0L
-  private var isCalibrating: Boolean = false
+  private val calibration = new Calibration[F](
+    dispatcher,
+    calibrateTopic,
+    (lx, ly, rx, ry) => applyPositionsAndPublish(lx, ly, rx, ry),
+    () => Platform.runLater(() => { leftJoystickOpt.foreach(_.setNorm(0.0, 0.0)); rightJoystickOpt.foreach(_.setNorm(0.0, 0.0)) })
+  )
 
   @volatile private var last: ControllerState = ControllerState(
     throttle = Throttle(throttleR.center),
@@ -99,68 +101,7 @@ final class RadioSimUI[F[_]](
   }
 
   private def startCalibration(): Unit = {
-    if (calibrationTimerOpt.nonEmpty) return
-
-    dispatcher.unsafeRunAndForget(calibrateTopic.publish1(()))
-
-    calibrationStartNanos = System.nanoTime()
-    isCalibrating = true
-
-    val preStep1Pause = 5.0
-    val rampToCorner  = 0.5
-    val step1Duration = 5.0
-    val rampToCenter  = 0.5
-    val postStep1Pause = 5.0
-
-    val step2Up = 0.5
-    val step2Hold = 1.0
-    val step2Down = 0.5
-
-    val total = preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up + step2Hold + step2Down
-    val loops = 5.0
-
-    val timer = AnimationTimer { now =>
-      val elapsed = (now - calibrationStartNanos) / 1e9
-      def centerBoth(): Unit = applyPositionsAndPublish(0.0, 0.0, 0.0, 0.0)
-
-      if (elapsed >= total) {
-        calibrationTimerOpt.foreach(_.stop()); calibrationTimerOpt = None; isCalibrating = false
-        Platform.runLater(() => { leftJoystickOpt.foreach(_.setNorm(0.0, 0.0)); rightJoystickOpt.foreach(_.setNorm(0.0, 0.0)) })
-      } else if (elapsed < preStep1Pause) {
-        centerBoth()
-      } else if (elapsed < preStep1Pause + rampToCorner) {
-        val t0 = elapsed - preStep1Pause; val p = math.max(0.0, math.min(1.0, t0 / rampToCorner))
-        val x = 0.0 + (1.0 - 0.0) * p; val y = 0.0 + (1.0 - 0.0) * p
-        applyPositionsAndPublish(x, y, x, y)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration) {
-        val r = elapsed - (preStep1Pause + rampToCorner)
-        val sWrap = ((r / step1Duration) * loops) % 1.0
-        val (lx, ly) = posOnSquare(sWrap)
-        val (rx, ry) = posOnSquare(1.0 - sWrap)
-        applyPositionsAndPublish(lx, ly, rx, ry)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter) {
-        val t0 = elapsed - (preStep1Pause + rampToCorner + step1Duration); val p = math.max(0.0, math.min(1.0, t0 / rampToCenter))
-        val x = 1.0 + (0.0 - 1.0) * p; val y = 1.0 + (0.0 - 1.0) * p
-        applyPositionsAndPublish(x, y, x, y)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause) {
-        centerBoth()
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up) {
-        val t0 = elapsed - (preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause)
-        val p = math.max(0.0, math.min(1.0, t0 / step2Up))
-        val ly = -1.0 * p
-        applyPositionsAndPublish(0.0, ly, 0.0, 0.0)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up + step2Hold) {
-        applyPositionsAndPublish(0.0, -1.0, 0.0, 0.0)
-      } else {
-        val t0 = elapsed - (preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up + step2Hold)
-        val p = math.max(0.0, math.min(1.0, t0 / step2Down))
-        val ly = -1.0 + (1.0 * p)
-        applyPositionsAndPublish(0.0, ly, 0.0, 0.0)
-      }
-    }
-
-    calibrationTimerOpt = Some(timer)
-    timer.start()
+    calibration.start()
   }
 
   def show(): Unit = {
@@ -175,7 +116,7 @@ final class RadioSimUI[F[_]](
     statusLabelOpt = Some(statusLabel)
 
     leftJoystick.onChange = { (xNorm, yNorm) =>
-      if (!isCalibrating) {
+      if (!calibration.isRunning) {
         val yawV = clampToRange(xNorm, yawR)
         val throttleNorm = (-yNorm + 1) / 2.0
         val throttleV = clampToRange(throttleNorm, throttleR)
@@ -184,7 +125,7 @@ final class RadioSimUI[F[_]](
     }
 
     rightJoystick.onChange = { (xNorm, yNorm) =>
-      if (!isCalibrating) {
+      if (!calibration.isRunning) {
         val rollV = clampToRange(xNorm, rollR)
         val pitchV = clampToRange(-yNorm, pitchR)
         publishState(last.throttle, last.yaw, Pitch(pitchV), Roll(rollV))
@@ -194,8 +135,7 @@ final class RadioSimUI[F[_]](
     btnCalibrate.onAction = _ => startCalibration()
     btnStop.onAction      = _ => {
       dispatcher.unsafeRunAndForget(stopTopic.publish1(()))
-      calibrationTimerOpt.foreach(_.stop()); calibrationTimerOpt = None
-      isCalibrating = false
+      calibration.stop()
       Platform.runLater(() => { leftJoystickOpt.foreach(_.setNorm(0.0, 0.0)); rightJoystickOpt.foreach(_.setNorm(0.0, 0.0)) })
     }
 
@@ -211,7 +151,6 @@ final class RadioSimUI[F[_]](
     new Stage() { title = s"scalaSegment — ${uiTheme}"; width = uiWidth; height = uiHeight; scene = new Scene(rootPane) }.show()
   }
 
-  // Implement missing UILayerPort method
   override def setGimbalState(state: ControllerState): F[Unit] = F.delay {
     last = state
     (leftJoystickOpt, rightJoystickOpt) match {

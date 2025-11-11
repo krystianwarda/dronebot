@@ -1,10 +1,11 @@
-// Scala
+// scala
 package com.dronebot.ui
 
 import cats.effect.Async
 import cats.effect.std.Dispatcher
 import com.dronebot.config.AxisRange
 import com.dronebot.domain.{ControllerState, Pitch, Roll, Throttle, Yaw}
+import com.dronebot.gamedroneinfo.DroneTelemetry
 import com.dronebot.ports.UILayerPort
 import fs2.concurrent.Topic
 import fs2.{Stream => Fs2Stream}
@@ -20,6 +21,8 @@ import scalafx.scene.layout._
 import scalafx.scene.paint._
 import scalafx.scene.shape._
 import scalafx.stage._
+import com.dronebot.radiosim.Calibration
+import com.dronebot.radiosim.TestFlight
 
 final class UILayerFx[F[_]](
                              dispatcher: Dispatcher[F],
@@ -38,6 +41,7 @@ final class UILayerFx[F[_]](
                              uiTheme: String
                            )(implicit F: Async[F]) extends UILayerPort[F] {
 
+  private var gameInfoViewOpt: Option[GameDroneInfoView] = None
   private sealed trait DataSource
   private object DataSource {
     case object Radio extends DataSource
@@ -51,9 +55,12 @@ final class UILayerFx[F[_]](
 
   @volatile private var activeSource: DataSource = DataSource.Radio
 
-  private var calibrationTimerOpt: Option[AnimationTimer] = None
-  private var calibrationStartNanos: Long = 0L
-  private var isCalibrating: Boolean = false
+  // Delegated calibration and test instances
+  private var calibrationOpt: Option[Calibration[F]] = None
+  private def calibrationIsRunning: Boolean = calibrationOpt.exists(_.isRunning)
+
+  private var testFlightOpt: Option[TestFlight[F]] = None
+  private def testIsRunning: Boolean = testFlightOpt.exists(_.isRunning)
 
   @volatile private var last: ControllerState = ControllerState(
     throttle = Throttle(throttleR.center),
@@ -129,76 +136,62 @@ final class UILayerFx[F[_]](
     })
   }
 
+  // Start calibration by creating and delegating to the Calibration class
   private def startCalibration(): Unit = {
-    if (calibrationTimerOpt.nonEmpty) return
-    dispatcher.unsafeRunAndForget(calibrateTopic.publish1(()))
-    calibrationStartNanos = System.nanoTime()
-    isCalibrating = true
-    val preStep1Pause = 5.0
-    val rampToCorner  = 0.5
-    val step1Duration = 5.0
-    val rampToCenter  = 0.5
-    val postStep1Pause = 5.0
-    val step2Up = 0.5
-    val step2Hold = 1.0
-    val step2Down = 0.5
-    val total = preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up + step2Hold + step2Down
-    val loops = 5.0
-    val timer = AnimationTimer { now =>
-      val elapsed = (now - calibrationStartNanos) / 1e9
-      def centerBoth(): Unit = applyPositionsAndPublish(0.0, 0.0, 0.0, 0.0)
-      if (elapsed >= total) {
-        calibrationTimerOpt.foreach(_.stop()); calibrationTimerOpt = None
-        isCalibrating = false
-        Platform.runLater(() => {
-          leftJoystickOpt.foreach(_.setNorm(0.0, 0.0))
-          rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
-        })
-      } else if (elapsed < preStep1Pause) {
-        centerBoth()
-      } else if (elapsed < preStep1Pause + rampToCorner) {
-        val t0 = elapsed - preStep1Pause
-        val p  = math.max(0.0, math.min(1.0, t0 / rampToCorner))
-        val x = p
-        val y = p
-        applyPositionsAndPublish(x, y, x, y)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration) {
-        val r = elapsed - (preStep1Pause + rampToCorner)
-        val s = (r / step1Duration) * loops
-        val sWrap = s - math.floor(s)
-        val (lx, ly) = posOnSquare(sWrap)
-        val (rx, ry) = posOnSquare(1.0 - sWrap)
-        applyPositionsAndPublish(lx, ly, rx, ry)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter) {
-        val t0 = elapsed - (preStep1Pause + rampToCorner + step1Duration)
-        val p  = math.max(0.0, math.min(1.0, t0 / rampToCenter))
-        val x = 1.0 - p
-        val y = 1.0 - p
-        applyPositionsAndPublish(x, y, x, y)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause) {
-        centerBoth()
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up) {
-        val t0 = elapsed - (preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause)
-        val p = math.max(0.0, math.min(1.0, t0 / step2Up))
-        val ly = -1.0 * p
-        applyPositionsAndPublish(0.0, ly, 0.0, 0.0)
-      } else if (elapsed < preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up + step2Hold) {
-        applyPositionsAndPublish(0.0, -1.0, 0.0, 0.0)
-      } else {
-        val t0 = elapsed - (preStep1Pause + rampToCorner + step1Duration + rampToCenter + postStep1Pause + step2Up + step2Hold)
-        val p = math.max(0.0, math.min(1.0, t0 / step2Down))
-        val ly = -1.0 + p
-        applyPositionsAndPublish(0.0, ly, 0.0, 0.0)
-      }
+    if (calibrationIsRunning) return
+
+    val onFinish: () => Unit = () => {
+      calibrationOpt = None
+      Platform.runLater(() => {
+        leftJoystickOpt.foreach(_.setNorm(0.0, 0.0))
+        rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
+      })
     }
-    calibrationTimerOpt = Some(timer)
-    timer.start()
+
+    val cal = new Calibration[F](
+      dispatcher,
+      calibrateTopic,
+      (lx: Double, ly: Double, rx: Double, ry: Double) => applyPositionsAndPublish(lx, ly, rx, ry),
+      onFinish
+    )
+
+    calibrationOpt = Some(cal)
+    cal.start()
+  }
+
+  // Start test flight by creating and delegating to the TestFlight class
+  private def startTestFlight(): Unit = {
+    if (testIsRunning) return
+
+    val onFinish: () => Unit = () => {
+      testFlightOpt = None
+      Platform.runLater(() => {
+        leftJoystickOpt.foreach(_.setNorm(0.0, 0.0))
+        rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
+      })
+    }
+
+    val tf = new TestFlight[F](
+      dispatcher,
+      testTopic,
+      (lx: Double, ly: Double, rx: Double, ry: Double) => applyPositionsAndPublish(lx, ly, rx, ry),
+      onFinish
+    )
+
+    testFlightOpt = Some(tf)
+    tf.start()
   }
 
   def show(): Unit = {
     val leftJoystick  = new JoystickView("Left", radius = 100)
     val rightJoystick = new JoystickView("Right", radius = 100)
+
+    val gameInfoView  = new GameDroneInfoView("Drone Telemetry")
+    gameInfoViewOpt = Some(gameInfoView)
+
+
     val btnCalibrate  = new Button("Calibration")
+    val btnTest       = new Button("Test Flight")
     val btnStop       = new Button("Stop")
     val btnStartRadio = new Button("Start Radio")
     val btnStartSim   = new Button("Start Simulated Radio")
@@ -220,8 +213,9 @@ final class UILayerFx[F[_]](
     }
     setInputMode(DataSource.Radio)
 
+    // Joystick handlers now consult the calibration and testflight instance state
     leftJoystick.onChange = { (xNorm, yNorm) =>
-      if (!isCalibrating && activeSource == DataSource.Simulated) {
+      if (!calibrationIsRunning && !testIsRunning && activeSource == DataSource.Simulated) {
         val yawV = clampToRange(xNorm, yawR)
         val throttleNorm = (-yNorm + 1) / 2.0
         val throttleV = clampToRange(throttleNorm, throttleR)
@@ -230,7 +224,7 @@ final class UILayerFx[F[_]](
     }
 
     rightJoystick.onChange = { (xNorm, yNorm) =>
-      if (!isCalibrating && activeSource == DataSource.Simulated) {
+      if (!calibrationIsRunning && !testIsRunning && activeSource == DataSource.Simulated) {
         val rollV = clampToRange(xNorm, rollR)
         val pitchV = clampToRange(-yNorm, pitchR)
         publishState(last.throttle, last.yaw, Pitch(pitchV), Roll(rollV))
@@ -238,10 +232,11 @@ final class UILayerFx[F[_]](
     }
 
     btnCalibrate.onAction = _ => startCalibration()
+    btnTest.onAction      = _ => startTestFlight()
     btnStop.onAction      = _ => {
       dispatcher.unsafeRunAndForget(stopTopic.publish1(()))
-      calibrationTimerOpt.foreach(_.stop()); calibrationTimerOpt = None
-      isCalibrating = false
+      calibrationOpt.foreach(_.stop()); calibrationOpt = None
+      testFlightOpt.foreach(_.stop()); testFlightOpt = None
       Platform.runLater(() => {
         leftJoystickOpt.foreach(_.setNorm(0.0, 0.0))
         rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
@@ -264,7 +259,10 @@ final class UILayerFx[F[_]](
     val rootPane = new BorderPane {
       padding = Insets(10)
       style = "-fx-background-color: #1e1e1e;"
-      center = new HBox(20) { children = Seq(leftWithAxis, rightWithAxis) }
+      center = new HBox(20) {
+        // add the new telemetry panel on the right
+        children = Seq(leftWithAxis, rightWithAxis, gameInfoView.node)
+      }
       bottom = new VBox(10) {
         children = Seq(
           new HBox(10) {
@@ -274,6 +272,7 @@ final class UILayerFx[F[_]](
               btnStartRadio,
               btnStartSim,
               btnCalibrate,
+              btnTest,
               btnStop
             )
           },
@@ -288,6 +287,12 @@ final class UILayerFx[F[_]](
       height = uiHeight
       scene = new Scene(rootPane)
     }.show()
+  }
+
+  def setDroneTelemetry(t: DroneTelemetry): F[Unit] = F.delay {
+    gameInfoViewOpt.foreach { v =>
+      scalafx.application.Platform.runLater(() => v.update(t))
+    }
   }
 
   override def setGimbalState(state: ControllerState): F[Unit] = F.delay {
