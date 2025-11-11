@@ -1,0 +1,2 @@
+# Placeholder mapping database. Jamepad will fall back to built-in mappings if this file is empty.
+
