@@ -36,6 +36,8 @@ float normalizeAxis(Sint16 v) {
 
 // Target matching name (case-insensitive). Can be overridden by --name argument.
 static std::string g_target_name = "radiomaster pocket joystick";
+// If true, accept the first joystick-like device found
+static bool g_accept_any = false;
 
 // Streaming configuration (local)
 static const char* STREAM_IP = "127.0.0.1"; // localhost
@@ -130,15 +132,65 @@ void close_stream() {
 
 int find_radiomaster_index() {
  int num = SDL_NumJoysticks();
+ if (num <=0) {
+ std::cout << "No SDL joysticks reported (SDL_NumJoysticks()=" << num << ")\n";
+ return -1;
+ }
+
+ std::cout << "Enumerating SDL joysticks (count=" << num << "):\n";
  for (int i =0; i < num; ++i) {
- const char* name = SDL_JoystickNameForIndex(i);
- std::string sname = name ? name : "(unknown)";
- std::string lower = toLower(sname);
- if (lower.find(g_target_name) != std::string::npos || lower.find("radiomaster") != std::string::npos || lower.find("edgetx") != std::string::npos) {
- std::cout << "Found candidate joystick index=" << i << " name='" << sname << "'\n";
+ const char* name_c = SDL_JoystickNameForIndex(i);
+ std::string sname = name_c ? name_c : "(unknown)";
+ SDL_JoystickGUID guid = SDL_JoystickGetDeviceGUID(i);
+ char guid_str[64];
+ SDL_JoystickGetGUIDString(guid, guid_str, sizeof(guid_str));
+ int axes = SDL_JoystickNumAxes(SDL_JoystickOpen(i));
+ // Close immediately the temporary open if possible
+ SDL_Joystick* tmp = SDL_JoystickFromInstanceID(SDL_JoystickInstanceID(SDL_JoystickOpen(i)));
+ (void)tmp;
+ std::cout << " index=" << i << " name='" << sname << "' guid=" << guid_str << " axes=" << axes << "\n";
+ }
+
+ // Candidate matching heuristics
+ for (int i =0; i < num; ++i) {
+ const char* name_c = SDL_JoystickNameForIndex(i);
+ std::string sname = name_c ? toLower(name_c) : std::string();
+
+ // Also examine GUID string
+ SDL_JoystickGUID guid = SDL_JoystickGetDeviceGUID(i);
+ char guid_str[64];
+ SDL_JoystickGetGUIDString(guid, guid_str, sizeof(guid_str));
+ std::string sguid = toLower(guid_str);
+
+ // Broad heuristics
+ bool matched = false;
+ if (g_accept_any) {
+ // prefer joysticks with multiple axes
+ int axes = SDL_JoystickNumAxes(SDL_JoystickOpen(i));
+ if (axes >=2) matched = true;
+ }
+
+ if (!matched) {
+ if (!g_target_name.empty()) {
+ if (sname.find(g_target_name) != std::string::npos) matched = true;
+ }
+ }
+
+ // Additional helpful substrings to match common radio/joystick device names
+ if (!matched) {
+ const char* extras[] = {"radiomaster", "edgetx", "edgetx", "edge", "transmitter", "pocket", "joystick", "gamepad", "controller", "radio", "frsky", "flysky", "sbus", "hori", "xbox", "ps4", "ps5"};
+ for (const char* e : extras) {
+ if (!sname.empty() && sname.find(e) != std::string::npos) { matched = true; break; }
+ if (sguid.find(e) != std::string::npos) { matched = true; break; }
+ }
+ }
+
+ if (matched) {
+ std::cout << "Found candidate joystick index=" << i << " name='" << (name_c ? name_c : "(unknown)") << "'\n";
  return i;
  }
  }
+
  return -1;
 }
 
@@ -149,6 +201,9 @@ int main(int argc, char** argv) {
  if (a == "--name" && i +1 < argc) {
  g_target_name = toLower(argv[++i]);
  std::cout << "Target device name set to: '" << g_target_name << "'\n";
+ } else if (a == "--any") {
+ g_accept_any = true;
+ std::cout << "Will accept first joystick-like device (--any)\n";
  }
  }
 
@@ -163,7 +218,7 @@ int main(int argc, char** argv) {
 
  // initialize TCP streaming
  if (!init_stream()) {
- std::cerr << "Warning: failed to initialize TCP stream. Continuing without network streaming.\n";
+ std::cerr << "Warning: failed to initialize TCP stream. Continuing without network streaming." << "\n";
  }
 
  SDL_Joystick* joy = nullptr;
@@ -379,6 +434,7 @@ int main(int argc, char** argv) {
  std::this_thread::sleep_for(std::chrono::milliseconds(50));
  }
 
+ // End of main cleanup
  if (joy) SDL_JoystickClose(joy);
  close_stream();
  SDL_Quit();
