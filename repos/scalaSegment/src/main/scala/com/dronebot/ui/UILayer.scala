@@ -7,6 +7,7 @@ import com.dronebot.config.AxisRange
 import com.dronebot.domain.{ControllerState, Pitch, Roll, Throttle, Yaw}
 import com.dronebot.gamedroneinfo.DroneTelemetry
 import com.dronebot.ports.UILayerPort
+import com.dronebot.ui.{TelemetryMapView, AltitudeGraphView}
 import fs2.concurrent.Topic
 import fs2.{Stream => Fs2Stream}
 import scalafx.Includes._
@@ -42,6 +43,8 @@ final class UILayerFx[F[_]](
                            )(implicit F: Async[F]) extends UILayerPort[F] {
 
   private var gameInfoViewOpt: Option[GameDroneInfoView] = None
+  private var mapViewOpt: Option[TelemetryMapView] = None
+  private var altitudeViewOpt: Option[AltitudeGraphView] = None
   private sealed trait DataSource
   private object DataSource {
     case object Radio extends DataSource
@@ -189,6 +192,11 @@ final class UILayerFx[F[_]](
     val gameInfoView  = new GameDroneInfoView("Drone Telemetry")
     gameInfoViewOpt = Some(gameInfoView)
 
+    // ADD: create map and altitude views
+    val mapView = new TelemetryMapView("XY Map", size = 500.0, pixelsPerUnit = 1.0)
+    val altitudeView = new AltitudeGraphView("Altitude (Z) vs time")
+    mapViewOpt = Some(mapView)
+    altitudeViewOpt = Some(altitudeView)
 
     val btnCalibrate  = new Button("Calibration")
     val btnTest       = new Button("Test Flight")
@@ -256,12 +264,19 @@ final class UILayerFx[F[_]](
     val leftWithAxis  = axisLabeled(leftJoystick,  "Left Joystick")
     val rightWithAxis = axisLabeled(rightJoystick, "Right Joystick", yPositiveUp = true)
 
+    val rightPanel = new VBox(10) {
+      children = Seq(
+        gameInfoView.node,
+        new HBox(10) { children = Seq(mapView.node, altitudeView.node) }
+      )
+    }
+
     val rootPane = new BorderPane {
       padding = Insets(10)
       style = "-fx-background-color: #1e1e1e;"
       center = new HBox(20) {
-        // add the new telemetry panel on the right
-        children = Seq(leftWithAxis, rightWithAxis, gameInfoView.node)
+        // use the panel that includes telemetry info + map + graph
+        children = Seq(leftWithAxis, rightWithAxis, rightPanel)
       }
       bottom = new VBox(10) {
         children = Seq(
@@ -290,8 +305,11 @@ final class UILayerFx[F[_]](
   }
 
   def setDroneTelemetry(t: DroneTelemetry): F[Unit] = F.delay {
-    gameInfoViewOpt.foreach { v =>
-      scalafx.application.Platform.runLater(() => v.update(t))
+    scalafx.application.Platform.runLater { () =>
+      gameInfoViewOpt.foreach(_.update(t))
+
+      mapViewOpt.foreach(_.update(t))
+      altitudeViewOpt.foreach(_.update(t))
     }
   }
 

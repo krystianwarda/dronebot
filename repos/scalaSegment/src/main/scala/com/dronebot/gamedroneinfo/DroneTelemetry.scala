@@ -1,3 +1,4 @@
+// Scala
 package com.dronebot.gamedroneinfo
 
 import cats.effect.{Async, Resource}
@@ -35,15 +36,23 @@ object DroneTelemetryCodec {
     if (bytes.length < BaseSize) return None
 
     val bb = ByteBuffer.wrap(bytes, 0, BaseSize).order(ByteOrder.LITTLE_ENDIAN)
-
     def f(): Double = bb.getFloat().toDouble
-    val ts        = f()
-    val position  = Vec3(f(), f(), f())
-    val attitude  = Quaternion(f(), f(), f(), f())
-    val velocity  = Vec3(f(), f(), f())
-    val gyro      = Vec3(f(), f(), f())
-    val inputs    = Inputs(f(), f(), f(), f())
-    val battery   = Battery(f(), f())
+
+    val ts = f()
+
+    // Read as X,Y,Z then swap Y<->Z so that Z becomes height and X stays the same
+    val posX = f(); val posY = f(); val posZ = f()
+    val position = Vec3(posX, posZ, posY)
+
+    val attitude = Quaternion(f(), f(), f(), f())
+
+    // Same swap for velocity: Z carries vertical speed
+    val velX = f(); val velY = f(); val velZ = f()
+    val velocity = Vec3(velX, velZ, velY)
+
+    val gyro    = Vec3(f(), f(), f())
+    val inputs  = Inputs(f(), f(), f(), f())
+    val battery = Battery(f(), f())
 
     // Remaining: 1 byte motor_count, then 4*count floats of rpms (optional)
     val remaining = Arrays.copyOfRange(bytes, BaseSize, bytes.length)
@@ -98,4 +107,3 @@ final class TelemetryUdpReceiver[F[_]](bindIp: String = "0.0.0.0", port: Int = 9
       }.unNone
     }
 }
-
