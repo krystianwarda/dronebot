@@ -1,6 +1,6 @@
 package com.dronebot.adapters.infra.simradio
 
-import cats.effect.Async
+import cats.effect.{Async, Sync}
 import cats.effect.std.Dispatcher
 import com.dronebot.adapters.infra.ports.UILayerPort
 import com.dronebot.app.config.AxisRange
@@ -16,6 +16,15 @@ import scalafx.scene.layout.{BorderPane, HBox, StackPane, VBox}
 import scalafx.scene.paint.Color
 import scalafx.scene.shape.Circle
 import scalafx.stage.Stage
+
+
+final class UiSimRadio[F[_]](applyPositions: (Double, Double, Double, Double) => Unit)(implicit F: Sync[F])
+  extends SimRadio[F] {
+
+  override def setSticks(lx: Double, ly: Double, rx: Double, ry: Double): F[Unit] =
+    F.delay(applyPositions(lx, ly, rx, ry))
+}
+
 
 final class RadioSimUI[F[_]](
                               dispatcher: Dispatcher[F],
@@ -214,3 +223,4 @@ private final class JoystickView(label: String, radius: Double) {
     nx = cx; ny = cy; onChange(nx, ny)
   }
 }
+

@@ -1,4 +1,3 @@
-// Scala
 package com.dronebot.app
 
 import cats.effect.std.Dispatcher

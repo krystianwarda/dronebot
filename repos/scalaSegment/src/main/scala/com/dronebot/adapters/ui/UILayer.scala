@@ -1,26 +1,29 @@
-// scala
+// Scala
 package com.dronebot.adapters.ui
 
-import cats.effect.Async
+import cats.effect.{Async}
 import cats.effect.std.Dispatcher
+import cats.effect.kernel.Fiber
+import cats.syntax.all._               // added
+import cats.effect.syntax.all._        // added
 import com.dronebot.adapters.infra.ports.UILayerPort
 import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
-import com.dronebot.adapters.infra.simradio.{Calibration, TestFlight}
-import com.dronebot.adapters.ui
+import com.dronebot.adapters.infra.simradio.{Calibration, UiSimRadio}
 import com.dronebot.app.config.AxisRange
 import com.dronebot.core.domain._
+import com.dronebot.core.flightcontrol.TestFlightRunner
 import fs2.concurrent.Topic
 import fs2.{Stream => Fs2Stream}
 import scalafx.Includes._
-import scalafx.application._
+import scalafx.application.Platform
 import scalafx.collections.ObservableBuffer
 import scalafx.geometry._
 import scalafx.scene._
 import scalafx.scene.control._
-import scalafx.scene.input._
+import scalafx.scene.input.MouseEvent
 import scalafx.scene.layout._
-import scalafx.scene.paint._
-import scalafx.scene.shape._
+import scalafx.scene.paint.Color
+import scalafx.scene.shape.Circle
 import scalafx.stage._
 
 final class UILayerFx[F[_]](
@@ -41,27 +44,26 @@ final class UILayerFx[F[_]](
                            )(implicit F: Async[F]) extends UILayerPort[F] {
 
   private var gameInfoViewOpt: Option[GameDroneInfoView] = None
-  private var mapViewOpt: Option[ui.TelemetryMapView] = None
-  private var altitudeViewOpt: Option[ui.AltitudeGraphView] = None
+  private var mapViewOpt: Option[TelemetryMapView] = None
+  private var altitudeViewOpt: Option[AltitudeGraphView] = None
+
   private sealed trait DataSource
   private object DataSource {
     case object Radio extends DataSource
     case object Simulated extends DataSource
   }
+  @volatile private var activeSource: DataSource = DataSource.Radio
 
   private var leftJoystickOpt: Option[JoystickView]  = None
   private var rightJoystickOpt: Option[JoystickView] = None
   private var statusLabelOpt: Option[Label]          = None
   private var sourceSelectorOpt: Option[ComboBox[String]] = None
 
-  @volatile private var activeSource: DataSource = DataSource.Radio
-
-  // Delegated calibration and test instances
   private var calibrationOpt: Option[Calibration[F]] = None
   private def calibrationIsRunning: Boolean = calibrationOpt.exists(_.isRunning)
 
-  private var testFlightOpt: Option[TestFlight[F]] = None
-  private def testIsRunning: Boolean = testFlightOpt.exists(_.isRunning)
+  private var testFlightFiberOpt: Option[Fiber[F, Throwable, Unit]] = None
+  private def testIsRunning: Boolean = testFlightFiberOpt.isDefined
 
   @volatile private var last: ControllerState = ControllerState(
     throttle = Throttle(throttleR.center),
@@ -85,10 +87,10 @@ final class UILayerFx[F[_]](
 
   private def axisLabeled(view: JoystickView, title: String, yPositiveUp: Boolean = false): VBox = {
     val (topText, bottomText) = if (yPositiveUp) ("1", "-1") else ("-1", "1")
-    val topLbl    = new Label(topText)  { style = "-fx-text-fill: white; -fx-font-size: 10px;" }
+    val topLbl    = new Label(topText)   { style = "-fx-text-fill: white; -fx-font-size: 10px;" }
     val bottomLbl = new Label(bottomText){ style = "-fx-text-fill: white; -fx-font-size: 10px;" }
-    val leftLbl   = new Label("-1")     { style = "-fx-text-fill: white; -fx-font-size: 10px;" }
-    val rightLbl  = new Label("1")      { style = "-fx-text-fill: white; -fx-font-size: 10px;" }
+    val leftLbl   = new Label("-1")      { style = "-fx-text-fill: white; -fx-font-size: 10px;" }
+    val rightLbl  = new Label("1")       { style = "-fx-text-fill: white; -fx-font-size: 10px;" }
     val axisPane = new BorderPane {
       top = topLbl; bottom = bottomLbl; left = leftLbl; right = rightLbl; center = view.node
       BorderPane.setAlignment(topLbl, Pos.Center)
@@ -97,18 +99,6 @@ final class UILayerFx[F[_]](
       BorderPane.setAlignment(rightLbl, Pos.Center)
     }
     new VBox(5) { children = Seq(new Label(title) { style = "-fx-text-fill: white;" }, axisPane) }
-  }
-
-  private def posOnSquare(s: Double): (Double, Double) = {
-    val s0 = ((s % 1.0) + 1.0) % 1.0
-    val seg = (s0 * 4).toInt
-    val local = (s0 * 4) - seg
-    seg match {
-      case 0 => (1.0 - 2.0 * local, 1.0)
-      case 1 => (-1.0, 1.0 - 2.0 * local)
-      case 2 => (-1.0 + 2.0 * local, -1.0)
-      case _ => (1.0, -1.0 + 2.0 * local)
-    }
   }
 
   private def applyPositionsAndPublish(lx: Double, ly: Double, rx: Double, ry: Double): Unit = {
@@ -137,10 +127,8 @@ final class UILayerFx[F[_]](
     })
   }
 
-  // Start calibration by creating and delegating to the Calibration class
   private def startCalibration(): Unit = {
     if (calibrationIsRunning) return
-
     val onFinish: () => Unit = () => {
       calibrationOpt = None
       Platform.runLater(() => {
@@ -148,39 +136,46 @@ final class UILayerFx[F[_]](
         rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
       })
     }
-
     val cal = new Calibration[F](
       dispatcher,
       calibrateTopic,
       (lx: Double, ly: Double, rx: Double, ry: Double) => applyPositionsAndPublish(lx, ly, rx, ry),
       onFinish
     )
-
     calibrationOpt = Some(cal)
     cal.start()
   }
 
-  // Start test flight by creating and delegating to the TestFlight class
   private def startTestFlight(): Unit = {
     if (testIsRunning) return
-
-    val onFinish: () => Unit = () => {
-      testFlightOpt = None
+    val onFinish: F[Unit] = F.delay {
       Platform.runLater(() => {
         leftJoystickOpt.foreach(_.setNorm(0.0, 0.0))
         rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
       })
     }
+    val radio  = new UiSimRadio[F](applyPositionsAndPublish)
+    val runner = new TestFlightRunner[F](radio)
+    val program: F[Unit] =
+      (testTopic.publish1(()).void >> runner.run())
+        .guarantee(onFinish >> F.delay { testFlightFiberOpt = None })
 
-    val tf = new TestFlight[F](
-      dispatcher,
-      testTopic,
-      (lx: Double, ly: Double, rx: Double, ry: Double) => applyPositionsAndPublish(lx, ly, rx, ry),
-      onFinish
-    )
+    dispatcher.unsafeRunAndForget {
+      for {
+        fiber <- F.start(program)
+        _     <- F.delay { testFlightFiberOpt = Some(fiber) }
+      } yield ()
+    }
+  }
 
-    testFlightOpt = Some(tf)
-    tf.start()
+  private def stopAll(): Unit = {
+    dispatcher.unsafeRunAndForget(stopTopic.publish1(()))
+    calibrationOpt.foreach(_.stop()); calibrationOpt = None
+    testFlightFiberOpt.foreach(_.cancel); testFlightFiberOpt = None
+    Platform.runLater(() => {
+      leftJoystickOpt.foreach(_.setNorm(0.0, 0.0))
+      rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
+    })
   }
 
   def show(): Unit = {
@@ -190,9 +185,8 @@ final class UILayerFx[F[_]](
     val gameInfoView  = new GameDroneInfoView("Drone Telemetry")
     gameInfoViewOpt = Some(gameInfoView)
 
-    // ADD: create map and altitude views
-    val mapView = new ui.TelemetryMapView("XY Map", size = 250.0, pixelsPerUnit = 2)
-    val altitudeView = new ui.AltitudeGraphView("Altitude (Z) vs time")
+    val mapView = new TelemetryMapView("XY Map", size = 250.0, pixelsPerUnit = 0.5)
+    val altitudeView = new AltitudeGraphView("Altitude (Z) vs time")
     mapViewOpt = Some(mapView)
     altitudeViewOpt = Some(altitudeView)
 
@@ -219,7 +213,6 @@ final class UILayerFx[F[_]](
     }
     setInputMode(DataSource.Radio)
 
-    // Joystick handlers now consult the calibration and testflight instance state
     leftJoystick.onChange = { (xNorm, yNorm) =>
       if (!calibrationIsRunning && !testIsRunning && activeSource == DataSource.Simulated) {
         val yawV = clampToRange(xNorm, yawR)
@@ -228,7 +221,6 @@ final class UILayerFx[F[_]](
         publishState(Throttle(throttleV), Yaw(yawV), last.pitch, last.roll)
       }
     }
-
     rightJoystick.onChange = { (xNorm, yNorm) =>
       if (!calibrationIsRunning && !testIsRunning && activeSource == DataSource.Simulated) {
         val rollV = clampToRange(xNorm, rollR)
@@ -237,23 +229,13 @@ final class UILayerFx[F[_]](
       }
     }
 
-    btnCalibrate.onAction = _ => startCalibration()
-    btnTest.onAction      = _ => startTestFlight()
-    btnStop.onAction      = _ => {
-      dispatcher.unsafeRunAndForget(stopTopic.publish1(()))
-      calibrationOpt.foreach(_.stop()); calibrationOpt = None
-      testFlightOpt.foreach(_.stop()); testFlightOpt = None
-      Platform.runLater(() => {
-        leftJoystickOpt.foreach(_.setNorm(0.0, 0.0))
-        rightJoystickOpt.foreach(_.setNorm(0.0, 0.0))
-      })
-    }
-
+    btnCalibrate.onAction  = _ => startCalibration()
+    btnTest.onAction       = _ => startTestFlight()
+    btnStop.onAction       = _ => stopAll()
     btnStartRadio.onAction = _ => {
       setInputMode(DataSource.Radio)
       dispatcher.unsafeRunAndForget(startRadioTopic.publish1(()))
     }
-
     btnStartSim.onAction = _ => {
       setInputMode(DataSource.Simulated)
       dispatcher.unsafeRunAndForget(startSimTopic.publish1(()))
@@ -273,7 +255,6 @@ final class UILayerFx[F[_]](
       padding = Insets(10)
       style = "-fx-background-color: #1e1e1e;"
       center = new HBox(20) {
-        // use the panel that includes telemetry info + map + graph
         children = Seq(leftWithAxis, rightWithAxis, rightPanel)
       }
       bottom = new VBox(10) {
@@ -296,19 +277,18 @@ final class UILayerFx[F[_]](
 
     new Stage() {
       title = s"scalaSegment — ${uiTheme}"
-      width = uiWidth
+      width = math.max(uiWidth, 1280)
       height = uiHeight
       scene = new Scene(rootPane)
     }.show()
   }
 
   def setDroneTelemetry(t: DroneTelemetry): F[Unit] = F.delay {
-    scalafx.application.Platform.runLater { () =>
+    Platform.runLater(() => {
       gameInfoViewOpt.foreach(_.update(t))
-
       mapViewOpt.foreach(_.update(t))
       altitudeViewOpt.foreach(_.update(t))
-    }
+    })
   }
 
   override def setGimbalState(state: ControllerState): F[Unit] = F.delay {
@@ -363,8 +343,8 @@ private final class JoystickView(label: String, radius: Double) {
   private var ny: Double = 0.0
   var onChange: (Double, Double) => Unit = (_, _) => ()
   setNorm(0, 0)
-  node.onMousePressed = (e: MouseEvent) => handle(e)
-  node.onMouseDragged = (e: MouseEvent) => handle(e)
+  node.onMousePressed  = (e: MouseEvent) => handle(e)
+  node.onMouseDragged  = (e: MouseEvent) => handle(e)
   node.onMouseReleased = (_: MouseEvent) => setNorm(0, 0)
   private def handle(e: MouseEvent): Unit = {
     if (node.disable.value) return
@@ -382,8 +362,8 @@ private final class JoystickView(label: String, radius: Double) {
       }
     knob.translateX = clampedDx
     knob.translateY = clampedDy
-    nx = (clampedDx / max)
-    ny = (clampedDy / max)
+    nx = clampedDx / max
+    ny = clampedDy / max
     onChange(nx, ny)
   }
   def setNorm(x: Double, y: Double): Unit = {

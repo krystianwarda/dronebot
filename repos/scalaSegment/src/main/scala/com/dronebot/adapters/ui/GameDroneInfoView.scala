@@ -1,5 +1,5 @@
+// Scala
 package com.dronebot.adapters.ui
-
 
 import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
 import scalafx.geometry.Insets
@@ -18,8 +18,8 @@ final class GameDroneInfoView(title: String = "Drone Telemetry") {
   private val lblBat  = new Label("Battery: -")  { style = "-fx-text-fill: white; -fx-font-size: 11px;" }
   private val lblRpm  = new Label("RPM: -")      { style = "-fx-text-fill: white; -fx-font-size: 11px;" }
 
-  // Replaced single-circle gimbal with a dual-circle view (pitch & throttle)
-  private val gimbal = new DualCircleGimbalView("Gimbal", size = 120)
+  // Keep the same width; the gimbal view will auto be ~2.6x taller and all circles equal size
+  private val gimbal = new DualCircleGimbalView("Gimbal", size = 180.0)
 
   val node: VBox = new VBox(6) {
     padding = Insets(10)
@@ -44,11 +44,8 @@ final class GameDroneInfoView(title: String = "Drone Telemetry") {
     if (t.motorRpms.nonEmpty) {
       val rpmStr = t.motorRpms.map(r => f"$r%.0f").mkString(", ")
       lblRpm.text = s"RPM: $rpmStr"
-    } else {
-      lblRpm.text = "(No MotorRPM data)"
-    }
+    } else lblRpm.text = "(No MotorRPM data)"
 
-    // Drive the dual gauges: blue = pitch [-1,1], green = throttle [0,1]
-    gimbal.update(pitch = t.inputs.pitch, throttle = t.inputs.throttle)
+    gimbal.updateFromTelemetry(t)
   }
 }
