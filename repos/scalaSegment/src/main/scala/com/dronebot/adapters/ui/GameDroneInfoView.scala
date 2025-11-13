@@ -1,10 +1,10 @@
-package com.dronebot.ui
+package com.dronebot.adapters.ui
 
-import com.dronebot.gamedroneinfo._
+
+import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
 import scalafx.geometry.Insets
 import scalafx.scene.control._
 import scalafx.scene.layout._
-import scalafx.scene.paint.Color
 
 final class GameDroneInfoView(title: String = "Drone Telemetry") {
 

@@ -1,6 +1,6 @@
-package com.dronebot.ui
+package com.dronebot.adapters.ui
 
-import com.dronebot.gamedroneinfo.DroneTelemetry
+import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
 import scalafx.geometry.Insets
 import scalafx.scene.canvas.Canvas
 import scalafx.scene.control.Label

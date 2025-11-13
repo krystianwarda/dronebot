@@ -1,11 +1,10 @@
-package com.dronebot.ui
+package com.dronebot.adapters.ui
 
 import scalafx.geometry.Insets
 import scalafx.scene.control.Label
-import scalafx.scene.layout.{HBox, StackPane, VBox}
+import scalafx.scene.layout.{HBox, Pane, StackPane, VBox}
 import scalafx.scene.paint.Color
 import scalafx.scene.shape.{Circle, Line}
-import scalafx.scene.layout.Pane
 
 final class DualCircleGimbalView(title: String = "Gimbal", size: Double = 120.0) {
 

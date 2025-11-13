@@ -1,5 +1,4 @@
-// scala
-package com.dronebot.radiosim
+package com.dronebot.adapters.infra.simradio
 
 import cats.effect.Async
 import cats.effect.std.Dispatcher

@@ -1,4 +1,4 @@
-package com.dronebot.domain
+package com.dronebot.core.domain
 
 final case class Throttle(value: Double) extends AnyVal // [0,1]
 final case class Yaw(value: Double)      extends AnyVal // [-1,1]

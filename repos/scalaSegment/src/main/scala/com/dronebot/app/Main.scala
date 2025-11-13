@@ -1,19 +1,17 @@
 // Scala
-package com.dronebot
+package com.dronebot.app
 
-import cats.effect.{IO, IOApp, Ref}
 import cats.effect.std.Dispatcher
-import cats.syntax.all._
+import cats.effect.{IO, IOApp, Ref}
+import com.dronebot.adapters.infra.radio.RadioInput
+import com.dronebot.adapters.infra.simdroneinfo.TelemetryUdpReceiver
+import com.dronebot.adapters.infra.simradio.{ConsoleSimulatorOutput, VirtualGamepadPort}
+import com.dronebot.adapters.ui.UILayerFx
+import com.dronebot.app.config.AppConfig
+import com.dronebot.core.domain.{ControlCommand, ControllerState}
 import fs2.Stream
 import fs2.concurrent.Topic
-import com.dronebot.config.AppConfig
-import com.dronebot.domain.{ControlCommand, ControllerState}
-import com.dronebot.gamedroneinfo.{TelemetryUdpReceiver, DroneTelemetry}
-import com.dronebot.output.ConsoleSimulatorOutput
-import com.dronebot.radiosim.VirtualGamepadPort
 import scalafx.application.Platform
-import com.dronebot.radio.RadioInput
-import com.dronebot.ui.UILayerFx
 
 object Main extends IOApp.Simple {
   override def run: IO[Unit] =

@@ -1,4 +1,4 @@
-package com.dronebot.config
+package com.dronebot.app.config
 
 import cats.effect.Sync
 import pureconfig.{ConfigReader, ConfigSource}

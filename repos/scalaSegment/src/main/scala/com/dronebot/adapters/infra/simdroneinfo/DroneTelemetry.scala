@@ -1,5 +1,5 @@
 // Scala
-package com.dronebot.gamedroneinfo
+package com.dronebot.adapters.infra.simdroneinfo
 
 import cats.effect.{Async, Resource}
 import cats.syntax.all._

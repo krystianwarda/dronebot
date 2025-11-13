@@ -1,10 +1,10 @@
 // Scala
-package com.dronebot.radio
+package com.dronebot.adapters.infra.radio
 
 import cats.effect.Async
 import cats.syntax.all._
-import com.dronebot.config.JoystickRanges
-import com.dronebot.domain.{ControllerState, Pitch, Roll, Throttle, Yaw}
+import com.dronebot.app.config.JoystickRanges
+import com.dronebot.core.domain._
 import fs2.Stream
 
 import java.io.InputStream
@@ -151,7 +151,7 @@ private object SocketRadio {
     center + clamped * spanHalf
   }
 
-  def parseJsonToState(json: String, ranges: com.dronebot.config.JoystickRanges): Option[ControllerState] = {
+  def parseJsonToState(json: String, ranges: JoystickRanges): Option[ControllerState] = {
     val yawNorm      = findDouble("yaw", json).getOrElse(0.0)
     val throttle01   = findDouble("throttle", json).getOrElse(0.0)
     val pitchNorm    = findDouble("pitch", json).getOrElse(0.0)

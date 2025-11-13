@@ -1,11 +1,11 @@
-package com.dronebot.ui
+package com.dronebot.adapters.ui
 
-import com.dronebot.gamedroneinfo.DroneTelemetry
+import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
+import javafx.scene.chart.{XYChart => JFXXYChart}
 import scalafx.geometry.Insets
 import scalafx.scene.chart.{LineChart, NumberAxis}
 import scalafx.scene.control.Label
 import scalafx.scene.layout.VBox
-import javafx.scene.chart.{XYChart => JFXXYChart}
 
 final class AltitudeGraphView(title: String = "Altitude (Z) vs time") {
 

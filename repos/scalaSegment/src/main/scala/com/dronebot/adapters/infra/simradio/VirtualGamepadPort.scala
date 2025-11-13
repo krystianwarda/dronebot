@@ -1,7 +1,8 @@
-package com.dronebot.radiosim
+package com.dronebot.adapters.infra.simradio
 
 import cats.effect.Sync
-import com.dronebot.domain.ControlCommand
+import com.dronebot.core.domain.ControlCommand
+
 import java.io.File
 
 trait VirtualGamepadPort[F[_]] {

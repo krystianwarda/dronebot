@@ -1,10 +1,10 @@
-package com.dronebot.radiosim
+package com.dronebot.adapters.infra.simradio
 
 import cats.effect.Async
 import cats.effect.std.Dispatcher
-import com.dronebot.config.AxisRange
-import com.dronebot.domain.{ControllerState, Pitch, Roll, Throttle, Yaw}
-import com.dronebot.ports.UILayerPort
+import com.dronebot.adapters.infra.ports.UILayerPort
+import com.dronebot.app.config.AxisRange
+import com.dronebot.core.domain._
 import fs2.concurrent.Topic
 import scalafx.Includes._
 import scalafx.application.Platform

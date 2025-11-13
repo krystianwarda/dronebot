@@ -1,17 +1,17 @@
 // scala
-package com.dronebot.ui
+package com.dronebot.adapters.ui
 
 import cats.effect.Async
 import cats.effect.std.Dispatcher
-import com.dronebot.config.AxisRange
-import com.dronebot.domain.{ControllerState, Pitch, Roll, Throttle, Yaw}
-import com.dronebot.gamedroneinfo.DroneTelemetry
-import com.dronebot.ports.UILayerPort
-import com.dronebot.ui.{TelemetryMapView, AltitudeGraphView}
+import com.dronebot.adapters.infra.ports.UILayerPort
+import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
+import com.dronebot.adapters.infra.simradio.{Calibration, TestFlight}
+import com.dronebot.adapters.ui
+import com.dronebot.app.config.AxisRange
+import com.dronebot.core.domain._
 import fs2.concurrent.Topic
 import fs2.{Stream => Fs2Stream}
 import scalafx.Includes._
-import scalafx.animation._
 import scalafx.application._
 import scalafx.collections.ObservableBuffer
 import scalafx.geometry._
@@ -22,8 +22,6 @@ import scalafx.scene.layout._
 import scalafx.scene.paint._
 import scalafx.scene.shape._
 import scalafx.stage._
-import com.dronebot.radiosim.Calibration
-import com.dronebot.radiosim.TestFlight
 
 final class UILayerFx[F[_]](
                              dispatcher: Dispatcher[F],
@@ -43,8 +41,8 @@ final class UILayerFx[F[_]](
                            )(implicit F: Async[F]) extends UILayerPort[F] {
 
   private var gameInfoViewOpt: Option[GameDroneInfoView] = None
-  private var mapViewOpt: Option[TelemetryMapView] = None
-  private var altitudeViewOpt: Option[AltitudeGraphView] = None
+  private var mapViewOpt: Option[ui.TelemetryMapView] = None
+  private var altitudeViewOpt: Option[ui.AltitudeGraphView] = None
   private sealed trait DataSource
   private object DataSource {
     case object Radio extends DataSource
@@ -193,8 +191,8 @@ final class UILayerFx[F[_]](
     gameInfoViewOpt = Some(gameInfoView)
 
     // ADD: create map and altitude views
-    val mapView = new TelemetryMapView("XY Map", size = 250.0, pixelsPerUnit = 2)
-    val altitudeView = new AltitudeGraphView("Altitude (Z) vs time")
+    val mapView = new ui.TelemetryMapView("XY Map", size = 250.0, pixelsPerUnit = 2)
+    val altitudeView = new ui.AltitudeGraphView("Altitude (Z) vs time")
     mapViewOpt = Some(mapView)
     altitudeViewOpt = Some(altitudeView)
 

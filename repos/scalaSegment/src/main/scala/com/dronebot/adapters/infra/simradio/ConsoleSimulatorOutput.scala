@@ -1,8 +1,9 @@
-package com.dronebot.output
+package com.dronebot.adapters.infra.simradio
 
 import cats.effect.Sync
-import com.dronebot.domain.ControlCommand
-import com.dronebot.ports.SimulatorOutputPort
+import com.dronebot.adapters.infra.ports.SimulatorOutputPort
+import com.dronebot.core.domain.ControlCommand
+
 
 /** Placeholder simulator output adapter. */
 final class DummySimulatorOutput[F[_]](implicit F: Sync[F]) extends SimulatorOutputPort[F] {

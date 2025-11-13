@@ -1,10 +1,11 @@
 // Scala
-package com.dronebot.radio
+package com.dronebot.adapters.infra.radio
 
 import cats.effect.Async
 import cats.syntax.all._
-import com.dronebot.config.JoystickRanges
-import com.dronebot.domain.ControllerState
+import com.dronebot.app.config.JoystickRanges
+import com.dronebot.core.domain.ControllerState
+
 import fs2.Stream
 
 trait RadioBackend[F[_]] {

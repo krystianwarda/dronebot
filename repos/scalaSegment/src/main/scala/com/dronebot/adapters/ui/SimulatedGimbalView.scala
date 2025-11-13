@@ -1,4 +1,4 @@
-package com.dronebot.ui
+package com.dronebot.adapters.ui
 
 import scalafx.geometry._
 import scalafx.scene.control._

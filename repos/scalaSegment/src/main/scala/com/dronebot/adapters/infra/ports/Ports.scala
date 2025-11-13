@@ -1,6 +1,6 @@
-package com.dronebot.ports
+package com.dronebot.adapters.infra.ports
 
-import com.dronebot.domain.{ControlCommand, ControllerState}
+import com.dronebot.core.domain.{ControlCommand, ControllerState}
 import fs2.{Stream => Fs2Stream}
 
 trait GamepadInputPort[F[_]] {
