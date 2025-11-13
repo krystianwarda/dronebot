@@ -30,7 +30,7 @@ final class AltitudeGraphView(title: String = "Altitude (Z) vs time") {
     legendVisible = false
     createSymbols = false
     prefWidth = 500
-    prefHeight = 300
+    prefHeight = 250
     style = "-fx-background-color: #2d2d2d; -fx-border-color: #555; -fx-border-width: 1px;"
   }
   // Attach series to the chart's JavaFX data list

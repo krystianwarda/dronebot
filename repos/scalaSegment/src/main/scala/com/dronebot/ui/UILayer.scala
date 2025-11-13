@@ -193,7 +193,7 @@ final class UILayerFx[F[_]](
     gameInfoViewOpt = Some(gameInfoView)
 
     // ADD: create map and altitude views
-    val mapView = new TelemetryMapView("XY Map", size = 500.0, pixelsPerUnit = 1.0)
+    val mapView = new TelemetryMapView("XY Map", size = 250.0, pixelsPerUnit = 2)
     val altitudeView = new AltitudeGraphView("Altitude (Z) vs time")
     mapViewOpt = Some(mapView)
     altitudeViewOpt = Some(altitudeView)

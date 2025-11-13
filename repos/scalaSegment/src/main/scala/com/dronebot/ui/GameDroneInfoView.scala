@@ -18,7 +18,8 @@ final class GameDroneInfoView(title: String = "Drone Telemetry") {
   private val lblBat  = new Label("Battery: -")  { style = "-fx-text-fill: white; -fx-font-size: 11px;" }
   private val lblRpm  = new Label("RPM: -")      { style = "-fx-text-fill: white; -fx-font-size: 11px;" }
 
-  private val gimbal = new SimulatedGimbalView("Gimbal", size = 120)
+  // Replaced single-circle gimbal with a dual-circle view (pitch & throttle)
+  private val gimbal = new DualCircleGimbalView("Gimbal", size = 120)
 
   val node: VBox = new VBox(6) {
     padding = Insets(10)
@@ -47,7 +48,7 @@ final class GameDroneInfoView(title: String = "Drone Telemetry") {
       lblRpm.text = "(No MotorRPM data)"
     }
 
-    // Drive the gimbal from inputs [-1, 1]
-    gimbal.update(pitch = t.inputs.pitch, roll = t.inputs.roll)
+    // Drive the dual gauges: blue = pitch [-1,1], green = throttle [0,1]
+    gimbal.update(pitch = t.inputs.pitch, throttle = t.inputs.throttle)
   }
 }

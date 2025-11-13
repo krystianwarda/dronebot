@@ -9,8 +9,8 @@ import scalafx.scene.paint.Color
 
 final class TelemetryMapView(
                               label: String = "XY Map",
-                              size: Double = 500.0,
-                              pixelsPerUnit: Double = 1.0 // 1 px per world unit; adjust if you want different scaling
+                              size: Double = 250,
+                              pixelsPerUnit: Double = 2 // 1 px per world unit; adjust if you want different scaling
                             ) {
 
   private val canvas = new Canvas(size, size)
