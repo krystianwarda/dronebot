@@ -2,6 +2,7 @@
 package com.dronebot.adapters.ui
 
 import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
+import com.dronebot.adapters.ui.dashboard.DashboardView
 import scalafx.geometry.Insets
 import scalafx.scene.control._
 import scalafx.scene.layout._
@@ -19,7 +20,7 @@ final class GameDroneInfoView(title: String = "Drone Telemetry") {
   private val lblRpm  = new Label("RPM: -")      { style = "-fx-text-fill: white; -fx-font-size: 11px;" }
 
   // Keep the same width; the gimbal view will auto be ~2.6x taller and all circles equal size
-  private val gimbal = new DualCircleGimbalView("Gimbal", size = 180.0)
+  private val gimbal = new DashboardView("Gimbal", size = 180.0)
 
   val node: VBox = new VBox(6) {
     padding = Insets(10)
