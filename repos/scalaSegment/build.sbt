@@ -35,7 +35,8 @@ lazy val root = (project in file(".")).settings(
     "net.java.jinput" % "jinput" % "2.0.9",
 //    "net.java.jinput" % "jinput-platform" % "2.0.9" classifier "natives-all",
     "com.badlogicgames.jamepad" % "jamepad" % "2.0.20.0",
-    "ch.qos.logback" % "logback-classic" % "1.4.14"
+    "ch.qos.logback" % "logback-classic" % "1.4.14",
+    "pl.iterators" %% "sealed-monad" % "2.0.0"
   ),
   Compile / run / javaOptions ++= Seq(
     "-Djava.library.path=C:\\tools\\DLLs",

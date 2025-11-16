@@ -4,8 +4,8 @@ package com.dronebot.adapters.ui
 import cats.effect.{Async}
 import cats.effect.std.Dispatcher
 import cats.effect.kernel.Fiber
-import cats.syntax.all._               // added
-import cats.effect.syntax.all._        // added
+import cats.syntax.all._
+import cats.effect.syntax.all._
 import com.dronebot.adapters.infra.ports.UILayerPort
 import com.dronebot.adapters.infra.simdroneinfo.DroneTelemetry
 import com.dronebot.adapters.infra.simradio.{Calibration, UiSimRadio}
@@ -34,18 +34,17 @@ final class UILayerFx[F[_]](
                              stopTopic: Topic[F, Unit],
                              startRadioTopic: Topic[F, Unit],
                              startSimTopic: Topic[F, Unit],
+                             startHybridTopic: Topic[F, Unit],
+                             toggleAutoTop: fs2.concurrent.Topic[F, Unit],
                              throttleR: AxisRange,
                              yawR: AxisRange,
                              pitchR: AxisRange,
                              rollR: AxisRange,
                              uiWidth: Int,
                              uiHeight: Int,
-                             uiTheme: String
+                             uiTheme: String,
+                             gaugeSize: Double = 150.0
                            )(implicit F: Async[F]) extends UILayerPort[F] {
-
-  private var gameInfoViewOpt: Option[GameDroneInfoView] = None
-  private var mapViewOpt: Option[TelemetryMapView] = None
-  private var altitudeViewOpt: Option[AltitudeGraphView] = None
 
   private sealed trait DataSource
   private object DataSource {
@@ -53,6 +52,10 @@ final class UILayerFx[F[_]](
     case object Simulated extends DataSource
   }
   @volatile private var activeSource: DataSource = DataSource.Radio
+
+  private var gameInfoViewOpt: Option[GameDroneInfoView] = None
+  private var mapViewOpt: Option[TelemetryMapView] = None
+  private var altitudeViewOpt: Option[AltitudeGraphView] = None
 
   private var leftJoystickOpt: Option[JoystickView]  = None
   private var rightJoystickOpt: Option[JoystickView] = None
@@ -179,10 +182,10 @@ final class UILayerFx[F[_]](
   }
 
   def show(): Unit = {
-    val leftJoystick  = new JoystickView("Left", radius = 100)
-    val rightJoystick = new JoystickView("Right", radius = 100)
+    val leftJoystick  = new JoystickView("Left", radius = 50)
+    val rightJoystick = new JoystickView("Right", radius = 50)
 
-    val gameInfoView  = new GameDroneInfoView("Drone Telemetry")
+    val gameInfoView  = new GameDroneInfoView("Drone Telemetry", gaugeSize)
     gameInfoViewOpt = Some(gameInfoView)
 
     val mapView = new TelemetryMapView("XY Map", size = 250.0, pixelsPerUnit = 0.5)
@@ -190,25 +193,18 @@ final class UILayerFx[F[_]](
     mapViewOpt = Some(mapView)
     altitudeViewOpt = Some(altitudeView)
 
-    val btnCalibrate  = new Button("Calibration")
-    val btnTest       = new Button("Test Flight")
-    val btnStop       = new Button("Stop")
-    val btnStartRadio = new Button("Start Radio")
-    val btnStartSim   = new Button("Start Simulated Radio")
-    val statusLabel   = new Label("Idle")
-
-    val sourceSelector = new ComboBox[String](ObservableBuffer("Radio", "Simulated Radio")) {
-      value = "Radio"
-      promptText = "Data Source"
-    }
+    val controlsPanel = new ControlsPanel
 
     leftJoystickOpt = Some(leftJoystick)
     rightJoystickOpt = Some(rightJoystick)
-    statusLabelOpt = Some(statusLabel)
-    sourceSelectorOpt = Some(sourceSelector)
+    statusLabelOpt = Some(controlsPanel.statusLabel)
+    sourceSelectorOpt = Some(controlsPanel.sourceSelector)
 
-    sourceSelector.onAction = _ => {
-      val v = Option(sourceSelector.value()).getOrElse("Radio")
+    controlsPanel.btnToggleAutopilot.onAction = _ =>
+      dispatcher.unsafeRunAndForget(toggleAutoTop.publish1(()))
+
+    controlsPanel.sourceSelector.onAction = _ => {
+      val v = Option(controlsPanel.sourceSelector.value()).getOrElse("Radio")
       if (v == "Radio") setInputMode(DataSource.Radio) else setInputMode(DataSource.Simulated)
     }
     setInputMode(DataSource.Radio)
@@ -229,48 +225,31 @@ final class UILayerFx[F[_]](
       }
     }
 
-    btnCalibrate.onAction  = _ => startCalibration()
-    btnTest.onAction       = _ => startTestFlight()
-    btnStop.onAction       = _ => stopAll()
-    btnStartRadio.onAction = _ => {
+    controlsPanel.btnCalibrate.onAction  = _ => startCalibration()
+    controlsPanel.btnTest.onAction       = _ => startTestFlight()
+    controlsPanel.btnStop.onAction       = _ => stopAll()
+    controlsPanel.btnStartRadio.onAction = _ => {
       setInputMode(DataSource.Radio)
       dispatcher.unsafeRunAndForget(startRadioTopic.publish1(()))
     }
-    btnStartSim.onAction = _ => {
+    controlsPanel.btnStartSim.onAction = _ => {
       setInputMode(DataSource.Simulated)
       dispatcher.unsafeRunAndForget(startSimTopic.publish1(()))
     }
-
-    val leftWithAxis  = axisLabeled(leftJoystick,  "Left Joystick")
-    val rightWithAxis = axisLabeled(rightJoystick, "Right Joystick", yPositiveUp = true)
-
-    val rightPanel = new VBox(10) {
-      children = Seq(
-        gameInfoView.node,
-        new HBox(10) { children = Seq(mapView.node, altitudeView.node) }
-      )
+    controlsPanel.btnStartHybrid.onAction = _ => {
+      setInputMode(DataSource.Radio)
+      dispatcher.unsafeRunAndForget(startHybridTopic.publish1(()))
     }
+
+    val joysticksPanel = JoystickViewHelpers.createJoysticksPanel(leftJoystick, rightJoystick, "Joysticks")
 
     val rootPane = new BorderPane {
       padding = Insets(10)
-      style = "-fx-background-color: #1e1e1e;"
-      center = new HBox(20) {
-        children = Seq(leftWithAxis, rightWithAxis, rightPanel)
-      }
-      bottom = new VBox(10) {
+      style = "-fx-background-color: -fx-background;"
+      center = new VBox(10) {
         children = Seq(
-          new HBox(10) {
-            children = Seq(
-              new Label("Source:") { style = "-fx-text-fill: white;" },
-              sourceSelector,
-              btnStartRadio,
-              btnStartSim,
-              btnCalibrate,
-              btnTest,
-              btnStop
-            )
-          },
-          statusLabel
+          new HBox(10) { children = Seq(joysticksPanel, gameInfoView.node) },
+          new HBox(10) { children = Seq(controlsPanel.node, mapView.node, altitudeView.node) }
         )
       }
     }
@@ -319,61 +298,4 @@ final class UILayerFx[F[_]](
   override def onCalibrationStart: Fs2Stream[F, Unit] = calibrateTopic.subscribe(16)
   override def onTestStart: Fs2Stream[F, Unit]        = testTopic.subscribe(16)
   override def onStop: Fs2Stream[F, Unit]             = stopTopic.subscribe(16)
-}
-
-private final class JoystickView(label: String, radius: Double) {
-  private val base = new Circle {
-    this.radius = JoystickView.this.radius
-    fill = Color.web("#2d2d2d")
-    stroke = Color.web("#555555")
-    strokeWidth = 2
-  }
-  private val knob = new Circle {
-    this.radius = 14
-    fill = Color.web("#4caf50")
-    stroke = Color.web("#2e7d32")
-    strokeWidth = 2
-  }
-  val node: StackPane = new StackPane {
-    prefWidth = radius * 2 + 10
-    prefHeight = radius * 2 + 10
-    children = Seq(base, knob)
-  }
-  private var nx: Double = 0.0
-  private var ny: Double = 0.0
-  var onChange: (Double, Double) => Unit = (_, _) => ()
-  setNorm(0, 0)
-  node.onMousePressed  = (e: MouseEvent) => handle(e)
-  node.onMouseDragged  = (e: MouseEvent) => handle(e)
-  node.onMouseReleased = (_: MouseEvent) => setNorm(0, 0)
-  private def handle(e: MouseEvent): Unit = {
-    if (node.disable.value) return
-    val cx = node.width.value / 2.0
-    val cy = node.height.value / 2.0
-    val dx = e.x - cx
-    val dy = e.y - cy
-    val dist = math.hypot(dx, dy)
-    val max = radius
-    val (clampedDx, clampedDy) =
-      if (dist <= max) (dx, dy)
-      else {
-        val s = max / dist
-        (dx * s, dy * s)
-      }
-    knob.translateX = clampedDx
-    knob.translateY = clampedDy
-    nx = clampedDx / max
-    ny = clampedDy / max
-    onChange(nx, ny)
-  }
-  def setNorm(x: Double, y: Double): Unit = {
-    val max = radius
-    val cx = math.max(-1.0, math.min(1.0, x))
-    val cy = math.max(-1.0, math.min(1.0, y))
-    knob.translateX = cx * max
-    knob.translateY = cy * max
-    nx = cx
-    ny = cy
-    onChange(nx, ny)
-  }
 }
