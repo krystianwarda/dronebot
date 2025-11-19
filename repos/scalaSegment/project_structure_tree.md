@@ -11,6 +11,7 @@
 │   │       HybridSimRadio.scala
 │   │       SpaceToggle.scala
 │   │       TcpJsonServerRadio.scala
+│   │       TcpRadioCommon.scala
 │   │       TcpRadioStream.scala
 │   │
 │   ├───radio

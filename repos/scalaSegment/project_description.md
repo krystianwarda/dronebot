@@ -486,3 +486,181 @@ Output:
 
 Notes:
 - Each program is composed into the main app in Main.run.
+
+
+
+Package com.dronebot.core.flightcontrol
+Core flight logic: flight plans, preflight checks, autopilot, and high-level orchestration. All long-running behavior is expressed as FS2 Streams; pure logic is kept in small testable modules.
+
+flightcontrol/autopilot/Autopilot.scala
+Type: Trait Autopilot[F[_]] and companion object.
+Purpose: High-level interface for following a FlightPlan using live telemetry.
+
+Input:
+telemetry: Stream[F, DroneTelemetry] - simulator or real vehicle telemetry.
+ranges: JoystickRanges - configured physical axis ranges.
+plan: FlightPlan - time-based test flight plan from the planner.
+
+Output:
+Stream[F, ControllerState] - continuous stick commands.
+
+Notes:
+pidHoverBased implementation:
+Picks the current FlightSegment from the plan.
+Computes target altitude per segment type (HoldPosition, StraightLine, CircleAround).
+Delegates low-level stabilization to HoverAutopilot.streamWithDynamicTarget, providing a dynamic target Z function.
+noop implementation:
+Emits a neutral ControllerState at joystick centers as an infinite stream.
+Useful as a safety fallback or when no real autopilot is wired.
+
+
+
+flightcontrol/autopilot/HoverAutopilot.scala
+Type: Object HoverAutopilot.
+Purpose: Low-level PID hover controller, keeping altitude and attitude stable.
+
+Input:
+telemetry: Stream[F, DroneTelemetry].
+ranges: JoystickRanges.
+targetZ: Double (static) or targetZFn: (DroneTelemetry, Any) => Double (dynamic).
+
+Output:
+Stream[F, ControllerState] with continuous throttle, yaw, pitch, and roll commands.
+
+Notes:
+Uses internal PID controllers for altitude, roll, pitch, and yaw.
+Converts quaternion attitude to Euler angles, keeps horizon level and yaw near initial heading.
+stream holds a fixed altitude.
+streamWithDynamicTarget lets callers drive target altitude (and later other targets) from higher-level plan logic by passing in a segment handle alongside telemetry.
+
+
+
+flightcontrol/planner/FlightPlanner.scala
+Type: Sealed types and FlightPlanner[F[_]] trait.
+Purpose: Define and provide pre-canned test flight plans for the autopilot.
+
+Key types:
+TestFlightId - identifiers for selectable test flights (e.g. Map1CircleAround, Map2ThroughPoints).
+Waypoint - named 3D position in world space.
+FlightSegment - sealed hierarchy:
+HoldPosition - stay around a waypoint for a time span.
+StraightLine - fly from from to to between start/end times.
+CircleAround - circle around a center with radius and optional fixed altitude.
+FlightPlan - full plan with id, start waypoint, and ordered segments.
+
+Companion objects:
+FlightPlanLibrary - pure constructors of built-in plans.
+FlightPlanner.inMemory - in-memory implementation returning known ids and plans.
+
+
+
+flightcontrol/checks/PreFlightCheckResult.scala
+Type: Sealed trait PreFlightCheckResult and service traits.
+Purpose: Model the outcome of preflight checks and abstract telemetry/radio health probes.
+
+Types:
+PreFlightCheckResult cases (e.g. Ok, TelemetryNotAvailable, RadioNotResponsive, BatteryTooLow, ...).
+TelemetryService[F[_]] - abstract interface for telemetry liveness/freshness checks.
+RadioHealth[F[_]] - abstract interface for radio/vJoy connectivity and responsiveness checks.
+
+Notes:
+Keeps domain-level errors and service abstractions independent of any concrete implementation.
+
+
+
+flightcontrol/checks/FlightChecks.scala
+Type: Class FlightChecks[F[_]].
+Purpose: Aggregate and run all preflight checks before starting a test flight.
+
+Input:
+TelemetryService[F].
+RadioHealth[F].
+
+Output:
+runAll: F[PreFlightCheckResult] - either Ok or the first failing condition.
+
+Notes:
+Built using sealedmonad to short-circuit on the first failing check.
+Individual checks verify telemetry stream presence, freshness, and radio connectivity/responsiveness.
+
+
+
+flightcontrol/checks/VJoyRadioHealth.scala
+Type: Class VJoyRadioHealth[F[_]] implementing RadioHealth[F].
+Purpose: Concrete RadioHealth for a vJoy-backed virtual joystick.
+
+Input:
+vJoy: AnyRef - handle to the vJoy interface.
+
+Behavior:
+isConnected - uses reflection on the vJoy object to check device enabled state and status (VJD_STAT_FREE).
+isResponsive - tries invoking setAxis with a safe neutral value, interpreting success as a responsive device.
+
+Notes:
+Fully wrapped in Sync[F].blocking to avoid blocking the main compute pool.
+Catches all reflection/driver errors and reports failure cleanly.
+
+
+
+flightcontrol/checks/TestFlightRunner.scala
+Type: Class TestFlightRunner[F[_]].
+Purpose: Orchestrate a single test flight: resolve plan, run preflight, then execute via autopilot.
+
+Input:
+FlightChecks[F].
+FlightPlanner[F].
+Autopilot[F].
+runTestFlight arguments: TestFlightId, Stream[F, DroneTelemetry], JoystickRanges.
+
+Output:
+Stream[F, ControllerState]:
+On success: autopilot stream following the resolved FlightPlan.
+On failure (no plan or failed checks): currently an empty stream (can be extended to a safe neutral state).
+
+Notes:
+Encapsulates all side effects required to start a test flight in one place.
+
+
+
+flightcontrol/fsm/FlightStateMachine.scala
+Type: Pure FSM with FlightState, FlightEvent, FlightAction and step function.
+Purpose: Track high-level test flight lifecycle and decide which action to take next.
+
+States:
+Idle, PreFlight, InTestFlight, Aborted.
+
+Events:
+StartTestFlight(id), PreFlightOk, PreFlightFailed, Completed, AbortedByUser.
+
+Actions:
+BeginTestFlight(id), StopAll, None.
+
+Notes:
+step(current, event) is a pure function returning a Transition(next, action).
+Used by FlightManager to decide when to run checks, start a flight, or stop everything.
+
+
+
+flightcontrol/management/FlightManager.scala
+Type: Class FlightManager[F[_]] and companion.
+Purpose: High-level facade used by programs/UI to start and manage test flights.
+
+Input:
+Ref[F, FlightState] - current FSM state.
+FlightChecks[F], FlightPlanner[F], Autopilot[F].
+startTestFlight arguments: TestFlightId, telemetry Stream[F, DroneTelemetry], JoystickRanges.
+
+Output:
+Stream[F, ControllerState] representing the selected test flight, or an empty stream if not started.
+
+Behavior:
+On startTestFlight:
+Reads current FlightState.
+Feeds FlightEvent.StartTestFlight into FlightStateMachine.step.
+Updates the state Ref to Transition.next.
+Executes the side effect implied by Transition.action:
+BeginTestFlight - delegates to TestFlightRunner.runTestFlight.
+StopAll or None - yields Stream.empty for now.
+
+Companion:
+make helper builds a FlightManager and initializes state to FlightState.Idle
